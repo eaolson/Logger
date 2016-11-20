@@ -1102,6 +1102,11 @@ as
     l_log_null_item_yn varchar2(1);
     l_item_type varchar2(30) := upper(p_item_type);
     l_item_type_page_id number;
+    
+    type t_item_names is table of varchar2(255);
+    l_item_names t_item_names;
+    type t_item_values is table of varchar2(32767);
+    l_item_values t_item_values := t_item_values();
   begin
     $if $$no_op $then
       null;
@@ -1118,19 +1123,18 @@ as
         if logger.is_number(l_item_type) then
           l_item_type_page_id := to_number(l_item_type);
         end if;
-
-        insert into logger_logs_apex_items(log_id,app_session,item_name,item_value)
-        select p_log_id, l_app_session, item_name, item_value
+        
+        select item_name bulk collect into l_item_names
         from (
           -- Application items
-          select 1 app_page_seq, 0 page_id, item_name, v(item_name) item_value
+          select 1 app_page_seq, 0 page_id, item_name
           from apex_application_items
           where 1=1
             and application_id = l_app_id
             and l_item_type in (logger.g_apex_item_type_all, logger.g_apex_item_type_app)
           union all
           -- Application page items
-          select 2 app_page_seq, page_id, item_name, v(item_name) item_value
+          select 2 app_page_seq, page_id, item_name
           from apex_application_page_items
           where 1=1
             and application_id = l_app_id
@@ -1140,9 +1144,21 @@ as
               or (l_item_type_page_id is not null and l_item_type_page_id = page_id)
             )
           )
-        where 1=1
-          and (l_log_null_item_yn = 'Y' or item_value is not null)
         order by app_page_seq, page_id, item_name;
+        
+        l_item_values.extend( l_item_names.count );
+        for i in 1..l_item_names.count loop
+          if l_log_null_item_yn = 'Y' or v(l_item_names(i)) is not null then
+            l_item_values(i) := v(l_item_names(i));
+          else
+            l_item_names.delete(i);
+            l_item_values.delete(i);
+          end if;
+        end loop;
+        
+        forall i in indices of l_item_names
+        insert into logger_logs_apex_items(log_id,app_session,item_name,item_value)
+        values (p_log_id, l_app_session, l_item_names(i), l_item_values(i));        
 
       $end -- $if $$apex $then
 
